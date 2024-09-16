@@ -1,138 +1,114 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, flash
 import sqlite3
-from sqlite3 import Error
 
 app = Flask(__name__)
-app.secret_key = 'secreta'  # Chave secreta para gerenciamento de sessões
+app.secret_key = 'chave_secreta'
 
-# Lista de produtos permitidos
+# Produtos permitidos
 produtos_permitidos = [
-    "Pão", "Salsicha", "Molho de tomate", "Ervilha", "Milho", 
-    "Cebola", "Alho", "Sal", "Tempero verde", "Água", 
-    "Suco", "Absorvente", "Escova de Dente", "Pasta de Dente"
+    "Pão", "Salsicha", "Molho de tomate", "Ervilha", "Milho", "Cebola", 
+    "Alho", "Sal", "Tempero verde", "Água", "Suco", "Absorvente", 
+    "Escova de Dente", "Pasta de Dente"
 ]
 
-class Gestao:
-    def __init__(self, db_name='estoque.db'):
-        self.db_name = db_name
-        self.conn = self.criar_conexao()
-        self.criar_tabela_estoque()
+class SistemaDeEstoque:
+    def __init__(self):
+        self.conn = sqlite3.connect('estoque.db', check_same_thread=False)
+        self.criar_tabela()
 
-    def criar_conexao(self):
-        try:
-            conn = sqlite3.connect(self.db_name, check_same_thread=False)
-            return conn
-        except Error as e:
-            print(f"Erro ao conectar ao banco de dados: {e}")
-            return None
-
-    def criar_tabela_estoque(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS estoque (
-                    id INTEGER PRIMARY KEY,
-                    produto TEXT NOT NULL,
-                    quantidade INTEGER NOT NULL CHECK (quantidade >= 0)
-                )
-            ''')
-            self.conn.commit()
-        except Error as e:
-            print(f"Erro ao criar tabela: {e}")
+    def criar_tabela(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS estoque (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                produto TEXT NOT NULL,
+                quantidade INTEGER NOT NULL
+            )
+        ''')
+        self.conn.commit()
 
     def adicionar_produto(self, produto, quantidade):
-        if produto not in produtos_permitidos:
-            raise ValueError("Produto não permitido")
-        if not produto or quantidade < 0:
-            raise ValueError("Produto inválido ou quantidade negativa")
-        
         cursor = self.conn.cursor()
-        cursor.execute("SELECT quantidade FROM estoque WHERE produto=?", (produto,))
-        resultado = cursor.fetchone()
-
-        if resultado:
-            estoque_atual = resultado[0]
-            cursor.execute("UPDATE estoque SET quantidade=? WHERE produto=?", (estoque_atual + quantidade, produto))
+        cursor.execute('SELECT * FROM estoque WHERE produto = ?', (produto,))
+        item = cursor.fetchone()
+        
+        if item:
+            nova_quantidade = item[2] + quantidade
+            cursor.execute('UPDATE estoque SET quantidade = ? WHERE produto = ?', (nova_quantidade, produto))
         else:
-            cursor.execute("INSERT INTO estoque (produto, quantidade) VALUES (?, ?)", (produto, quantidade))
+            cursor.execute('INSERT INTO estoque (produto, quantidade) VALUES (?, ?)', (produto, quantidade))
         
         self.conn.commit()
 
     def remover_produto(self, produto, quantidade):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT quantidade FROM estoque WHERE produto=?", (produto,))
-        resultado = cursor.fetchone()
-        if resultado:
-            estoque_atual = resultado[0]
-            if estoque_atual >= quantidade:
-                novo_estoque = estoque_atual - quantidade
-                if novo_estoque == 0:
-                    cursor.execute("DELETE FROM estoque WHERE produto=?", (produto,))
-                else:
-                    cursor.execute("UPDATE estoque SET quantidade=? WHERE produto=?", (novo_estoque, produto))
-                self.conn.commit()
-            else:
-                raise ValueError(f"Quantidade insuficiente de {produto} em estoque")
-        else:
-            raise ValueError(f"{produto} não encontrado em estoque")
+        cursor.execute('SELECT * FROM estoque WHERE produto = ?', (produto,))
+        item = cursor.fetchone()
 
-    def consultar_estoque(self, produto):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT quantidade FROM estoque WHERE produto=?", (produto,))
-        resultado = cursor.fetchone()
-        if resultado:
-            return resultado[0]
+        if item and item[2] >= quantidade:
+            nova_quantidade = item[2] - quantidade
+            if nova_quantidade == 0:
+                cursor.execute('DELETE FROM estoque WHERE produto = ?', (produto,))
+            else:
+                cursor.execute('UPDATE estoque SET quantidade = ? WHERE produto = ?', (nova_quantidade, produto))
+            self.conn.commit()
+            return True
         else:
-            return 0
+            return False
 
     def listar_produtos(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT produto, quantidade FROM estoque WHERE quantidade > 0")
+        cursor.execute('SELECT produto, quantidade FROM estoque WHERE quantidade > 0')
         return cursor.fetchall()
 
-    def fechar_conexao(self):
-        if self.conn:
-            self.conn.close()
-
-sistema = Gestao()
+sistema = SistemaDeEstoque()
 
 @app.route('/')
 def index():
     produtos = sistema.listar_produtos()
-    return render_template('index.html', produtos=produtos)
+    return render_template('index.html', produtos=produtos, produtos_permitidos=produtos_permitidos)
 
+# Adicionar produto
 @app.route('/adicionar', methods=['POST'])
 def adicionar():
     produto = request.form['produto']
-    try:
-        quantidade = int(request.form['quantidade'])
+    quantidade = int(request.form['quantidade'])
+    
+    if produto in produtos_permitidos:
         sistema.adicionar_produto(produto, quantidade)
-        flash(f"{quantidade} unidades de {produto} foram adicionadas ao estoque.", "success")
-    except ValueError as e:
-        flash(str(e), "error")
-    except Error as e:
-        flash(f"Erro no banco de dados: {e}", "error")
-    return redirect(url_for('index'))
+        flash('Produto adicionado com sucesso!', 'success')
+    else:
+        flash('Produto inválido!', 'danger')
+    
+    return redirect('/')
 
+# Remover produto
 @app.route('/remover', methods=['POST'])
 def remover():
     produto = request.form['produto']
-    try:
-        quantidade = int(request.form['quantidade'])
-        sistema.remover_produto(produto, quantidade)
-        flash(f"{quantidade} unidades de {produto} foram removidas do estoque.", "success")
-    except ValueError as e:
-        flash(str(e), "error")
-    except Error as e:
-        flash(f"Erro no banco de dados: {e}", "error")
-    return redirect(url_for('index'))
+    quantidade = int(request.form['quantidade'])
+    
+    if sistema.remover_produto(produto, quantidade):
+        flash('Produto removido com sucesso!', 'success')
+    else:
+        flash('Quantidade insuficiente ou produto não encontrado.', 'danger')
+    
+    return redirect('/')
 
+# Consultar produto
 @app.route('/consultar', methods=['POST'])
 def consultar():
     produto = request.form['produto']
-    quantidade = sistema.consultar_estoque(produto)
-    flash(f"Quantidade de {produto} em estoque: {quantidade}", "info")
-    return redirect(url_for('index'))
+    produtos = sistema.listar_produtos()
+    
+    for prod, quantidade in produtos:
+        if prod == produto:
+            flash(f'O produto {produto} tem {quantidade} unidades em estoque.', 'info')
+            break
+    else:
+        flash(f'O produto {produto} não está em estoque.', 'danger')
+    
+    return redirect('/')
 
 if __name__ == '__main__':
     app.run(debug=True)
